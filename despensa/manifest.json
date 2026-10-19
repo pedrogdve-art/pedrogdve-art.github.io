@@ -1,0 +1,15 @@
+{
+  "name": "Freshkito",
+  "short_name": "Freshkito",
+  "description": "Organiza nevera, congelador y despensa, con lista de la compra y recetas.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F6F4EE",
+  "theme_color": "#2BB59A",
+  "lang": "es",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
