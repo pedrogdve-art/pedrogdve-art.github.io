@@ -1,5 +1,5 @@
 // Freshkito service worker: funciona sin conexión (stale-while-revalidate)
-const VERSION = 'freshkito-v2';
+const VERSION = 'freshkito-v3';
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.json', './icons/icon.svg',
   './js/app.js', './js/store.js', './js/foods.js', './js/recipes.js', './js/scanner.js',
@@ -26,12 +26,13 @@ self.addEventListener('fetch', e => {
 
   e.respondWith(
     caches.open(VERSION).then(async cache => {
-      const cached = await cache.match(req);
+      const cached = await cache.match(req, { ignoreSearch: url.origin === location.origin });
       const network = fetch(req).then(res => {
         if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone());
         return res;
       }).catch(() => cached);
-      return cached || network;
+      // Archivos de la app: red primero (siempre la última versión); librerías y fuentes: caché primero
+      return url.origin === location.origin ? network : (cached || network);
     })
   );
 });
