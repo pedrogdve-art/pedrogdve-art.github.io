@@ -2,6 +2,7 @@ import * as S from './store.js';
 import { EMOJIS, findFood, searchFoods, normalize, guessEmoji } from './foods.js';
 import { RECIPES, matchRecipe } from './recipes.js';
 import { openScanner, lookupBarcode } from './scanner.js';
+import * as Cloud from './cloud.js';
 
 /* ================= Utilidades ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -203,9 +204,8 @@ function renderOnboarding() {
   $('#obBack')?.addEventListener('click', () => { ob.step--; renderOnboarding(); });
   $('#obNext').onclick = () => {
     if (ob.step < 3) { ob.step++; return renderOnboarding(); }
-    S.init(ob);
     tab = 'fridge';
-    boot();
+    S.init(ob);
     toast('¡Tu cocina está lista! Pulsa <b>+</b> para añadir alimentos');
   };
 }
@@ -214,7 +214,7 @@ function renderOnboarding() {
 function renderShell() {
   app.innerHTML = `
     <header class="topbar">
-      <div class="brand"><span class="logo">🥬</span><span class="brand-name">Freshkito</span></div>
+      <div class="brand"><span class="logo">🥬</span><span class="brand-name">Freshkito</span><span id="syncDot" class="sync" hidden></span></div>
       <div class="top-actions">
         <button class="icon-btn" id="alertBtn" aria-label="Avisos">🔔<span class="badge" id="alertBadge" hidden></span></button>
         <button class="icon-btn" data-theme-btn></button>
@@ -236,6 +236,7 @@ function renderShell() {
   };
   $('#view').addEventListener('click', onViewClick);
   $('#view').addEventListener('submit', onViewSubmit);
+  setSyncStatus(syncStatus);
 }
 
 function setTab(t) {
@@ -424,7 +425,11 @@ function openItemForm({ item, zoneId, prefill, back } = {}) {
           <span class="muted small">${f.minQty > 0 ? `Te avisaré y lo sugeriré en la compra` : 'Sin aviso (solo cuando se agote)'}</span>
         </div>`;
     },
-    brand() { $('#fBrand', body).textContent = brand ? `🏷️ ${brand}${f.barcode ? ` · ${f.barcode}` : ''}` : ''; },
+    brand() {
+      const who = item?.addedBy && S.get().household?.memberInfo?.[item.addedBy]?.name;
+      const parts = [brand && `🏷️ ${brand}${f.barcode ? ` · ${f.barcode}` : ''}`, who && `👤 Añadido por ${who}`].filter(Boolean);
+      $('#fBrand', body).textContent = parts.join('   ');
+    },
     emoji() { $('#fEmojiBtn', body).textContent = f.emoji; },
     all() { this.qty(); this.loc(); this.exp(); this.min(); this.brand(); this.emoji(); }
   };
@@ -745,6 +750,7 @@ function openSettings(focusType) {
       const types = focusType && isAppliance(focusType) ? [focusType, ...Object.keys(META).filter(t => t !== focusType)] : Object.keys(META);
       return `
         ${sheetHead('Ajustes')}
+        ${accountSection()}
         <div class="set-row"><span>🌙 Modo oscuro</span><button class="switch" data-theme-switch aria-label="Modo oscuro"><i></i></button></div>
         <h4 class="sec-title">Distribución</h4>
         ${types.map(type => {
@@ -768,11 +774,11 @@ function openSettings(focusType) {
             </div>`;
         }).join('')}
         <h4 class="sec-title">Tus datos</h4>
-        <p class="muted small">Se guardan solo en este móvil. Haz una copia para no perderlos.</p>
+        <p class="muted small">${S.isRemote() ? 'Se guardan en la nube y se sincronizan con tu hogar.' : 'Se guardan solo en este móvil. Haz una copia para no perderlos.'}</p>
         <div class="chips wrap">
           <button class="chip" data-act="export">⬇️ Exportar copia</button>
           <label class="chip">⬆️ Importar<input type="file" accept="application/json" id="importFile" hidden></label>
-          <button class="chip danger" data-act="reset">♻️ Empezar de cero</button>
+          ${S.isRemote() ? '' : '<button class="chip danger" data-act="reset">♻️ Empezar de cero</button>'}
         </div>
         <p class="credits muted small">Freshkito · Datos de productos: Open Food Facts</p>`;
     },
@@ -780,6 +786,7 @@ function openSettings(focusType) {
       applyTheme();
       body.addEventListener('change', e => {
         if (e.target.dataset.rename) S.renameZone(e.target.dataset.rename, e.target.value);
+        if (e.target.id === 'hhNameIn') S.renameHousehold(e.target.value);
         if (e.target.id === 'importFile' && e.target.files[0]) {
           e.target.files[0].text().then(txt => { S.importJSON(txt); toast('Copia importada ✅'); }).catch(() => toast('Ese archivo no es válido'));
         }
@@ -787,6 +794,7 @@ function openSettings(focusType) {
       body.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.dataset.rename) e.target.blur(); });
       body.addEventListener('click', e => {
         const d = e.target.closest('button')?.dataset || {};
+        if (d.act) handleAccountAction(d.act);
         if (d.up) S.moveZone(d.up, -1);
         if (d.down) S.moveZone(d.down, 1);
         if (d.addz) { const [t, k] = d.addz.split('.'); S.addZone(t, k); }
@@ -809,8 +817,252 @@ function openSettings(focusType) {
   applyTheme();
 }
 
+/* ================= Cuenta, hogar y nube ================= */
+const MODE_KEY = 'freshkito:mode';
+const INVITE_KEY = 'freshkito:invite';
+const HID_KEY = 'freshkito:hid';
+let mode = localStorage.getItem(MODE_KEY); // 'local' | 'cloud' | null
+let syncStatus = '';
+const setMode = m => { mode = m; m ? localStorage.setItem(MODE_KEY, m) : localStorage.removeItem(MODE_KEY); };
+
+// Enlaces de invitación: ?invite=CODIGO
+const urlInvite = new URLSearchParams(location.search).get('invite');
+if (urlInvite) {
+  sessionStorage.setItem(INVITE_KEY, urlInvite.toUpperCase());
+  history.replaceState(null, '', location.pathname);
+}
+const inviteLink = code => `${location.origin}${location.pathname}?invite=${code}`;
+
+function setSyncStatus(s) {
+  syncStatus = s;
+  const el = $('#syncDot');
+  if (!el) return;
+  const map = { synced: ['☁️', 'Sincronizado'], pending: ['⏳', 'Sincronizando…'], offline: ['📴', 'Sin conexión: se sincronizará luego'] };
+  el.hidden = !map[s];
+  if (map[s]) { el.textContent = map[s][0]; el.title = map[s][1]; el.className = `sync ${s}`; }
+}
+
+const avatar = m => m?.photo
+  ? `<img class="avatar" src="${esc(m.photo)}" alt="" referrerpolicy="no-referrer">`
+  : `<span class="avatar">${esc((m?.name || '?')[0].toUpperCase())}</span>`;
+
+function renderSplash(msg = '') {
+  app.innerHTML = `<div class="splash"><div class="ob-logo">🥬</div><p class="muted">${esc(msg)}</p></div>`;
+}
+
+function renderAuth() {
+  app.innerHTML = `
+    <div class="onboard">
+      <div class="ob-top"><span></span><button class="icon-btn" data-theme-btn></button></div>
+      <div class="ob-card fade-in">
+        <div class="ob-hero">
+          <div class="ob-logo">🥬</div>
+          <h1>Freshkito</h1>
+          <p>Entra para tener tu cocina <b>sincronizada en todos tus móviles</b> y compartirla con tu familia.</p>
+        </div>
+        <div class="auth-box">
+          <button class="btn google block" id="gBtn">
+            <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+            Continuar con Google
+          </button>
+          <div class="or"><span>o con tu correo</span></div>
+          <form id="mailForm" class="mail-form">
+            <input type="email" id="mailIn" required placeholder="tu@correo.com" autocomplete="email" aria-label="Correo electrónico">
+            <button class="btn primary" type="submit">Enviar enlace</button>
+          </form>
+          <p class="muted small center">Te llegará un enlace para entrar, sin contraseñas.</p>
+          <div id="mailSent" class="mail-sent" hidden></div>
+          <button class="btn ghost block" id="localBtn">Seguir sin cuenta</button>
+          <p class="muted small center">Tus datos de este móvil no se pierden.</p>
+        </div>
+      </div>
+    </div>`;
+  applyTheme();
+  $('#gBtn').onclick = async () => {
+    try { await Cloud.signInGoogle(); }
+    catch (e) { if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') toast('No se pudo entrar con Google: ' + esc(e.code || e.message)); }
+  };
+  $('#mailForm').onsubmit = async e => {
+    e.preventDefault();
+    const email = $('#mailIn').value.trim();
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      await Cloud.sendEmailLink(email);
+      const box = $('#mailSent');
+      box.hidden = false;
+      box.innerHTML = `📬 Te hemos enviado un enlace a <b>${esc(email)}</b>.<br>Ábrelo <b>en este mismo dispositivo</b>. Mira también en spam.`;
+      $('#mailForm').hidden = true;
+    } catch (err) {
+      toast('No se pudo enviar: ' + esc(err.code || err.message));
+      btn.disabled = false; btn.textContent = 'Enviar enlace';
+    }
+  };
+  $('#localBtn').onclick = () => { setMode('local'); boot(); };
+}
+
+function renderHousehold() {
+  const u = Cloud.currentUser();
+  const first = (u?.displayName || u?.email || '').split(/[\s@]/)[0];
+  const local = S.localData();
+  const localCount = local?.items?.length || 0;
+  const invite = sessionStorage.getItem(INVITE_KEY) || '';
+  app.innerHTML = `
+    <div class="onboard">
+      <div class="ob-top">
+        <span class="user-chip">${avatar({ name: first, photo: u?.photoURL })}<span>${esc(u?.email || '')}</span></span>
+        <button class="btn ghost small-btn" id="hhLogout">Salir</button>
+      </div>
+      <div class="ob-card fade-in">
+        <h2>🏠 ¡Hola${first ? ', ' + esc(first[0].toUpperCase() + first.slice(1)) : ''}!</h2>
+        <p class="muted">Crea tu hogar o únete al de tu familia con su código.</p>
+        <div class="choice-card ${invite ? 'dim' : ''}">
+          <h3>✨ Crear mi hogar</h3>
+          <input id="hhName" class="text-in" value="Casa de ${esc(first ? first[0].toUpperCase() + first.slice(1) : 'todos')}" aria-label="Nombre del hogar">
+          ${local?.appliances ? `<label class="check-row"><input type="checkbox" id="hhUpload" checked><span>Subir la cocina de este móvil${localCount ? ` (${localCount} alimentos)` : ''}</span></label>` : ''}
+          <button class="btn primary block" id="hhCreate">Crear hogar</button>
+        </div>
+        <div class="choice-card ${invite ? 'highlight' : ''}">
+          <h3>🔑 Unirme con un código</h3>
+          <input id="hhCode" class="text-in code-in" value="${esc(invite)}" placeholder="Ej: K7Q2XM" maxlength="8" autocapitalize="characters" aria-label="Código de invitación">
+          <button class="btn ${invite ? 'primary' : 'ghost'} block" id="hhJoin">Unirme</button>
+        </div>
+      </div>
+    </div>`;
+  const busy = (btn, on, label) => { btn.disabled = on; btn.textContent = on ? 'Un momento…' : label; };
+  $('#hhLogout').onclick = doLogout;
+  $('#hhCreate').onclick = async e => {
+    busy(e.target, true);
+    try {
+      const upload = $('#hhUpload')?.checked ? local : null;
+      const id = await Cloud.createHousehold($('#hhName').value.trim() || 'Mi hogar', upload);
+      sessionStorage.removeItem(INVITE_KEY);
+      connect(id);
+      toast('🏠 Hogar creado. Invita a tu familia desde ⚙️ Ajustes');
+    } catch (err) { console.error(err); toast('No se pudo crear: ' + esc(err.code || err.message)); busy(e.target, false, 'Crear hogar'); }
+  };
+  $('#hhJoin').onclick = async e => {
+    const code = $('#hhCode').value;
+    if (!code.trim()) return $('#hhCode').focus();
+    busy(e.target, true);
+    try {
+      const id = await Cloud.joinHousehold(code);
+      sessionStorage.removeItem(INVITE_KEY);
+      connect(id);
+      toast('🎉 Te has unido al hogar');
+    } catch (err) { console.error(err); toast(err.message === 'Código no válido' ? 'Ese código no existe 🤔' : 'No se pudo unir: ' + esc(err.code || err.message)); busy(e.target, false, 'Unirme'); }
+  };
+}
+
+function connect(id) {
+  localStorage.setItem(HID_KEY, id);
+  if (!$('#view')) renderSplash('Cargando tu hogar…');
+  let first = true;
+  Cloud.listen(id, {
+    onState: st => {
+      if (first) {
+        first = false;
+        S.attachRemote(Cloud.remoteOps, st);
+        if (!S.isReady()) boot();
+        checkPendingInvite(st);
+      } else S.applyRemote(st);
+    },
+    onStatus: setSyncStatus,
+    onGone: async () => {
+      localStorage.removeItem(HID_KEY);
+      S.detachRemote();
+      await Cloud.clearHousehold();
+      toast('Ya no formas parte de ese hogar');
+      renderHousehold();
+    }
+  });
+}
+
+async function checkPendingInvite(st) {
+  const code = sessionStorage.getItem(INVITE_KEY);
+  if (!code) return;
+  sessionStorage.removeItem(INVITE_KEY);
+  if (code === st.household?.inviteCode) return;
+  if (!confirm(`Te han invitado a otro hogar (${code}). ¿Quieres salir de "${st.household?.name}" y unirte?`)) return;
+  try {
+    await Cloud.leaveHousehold();
+    S.detachRemote();
+    const id = await Cloud.joinHousehold(code);
+    connect(id);
+  } catch (e) { toast('No se pudo cambiar de hogar'); }
+}
+
+async function doLogout() {
+  closeSheet(true);
+  setMode(null);
+  setSyncStatus('');
+  localStorage.removeItem(HID_KEY);
+  S.detachRemote();
+  await Cloud.logout();
+}
+
+function accountSection() {
+  if (!Cloud.isConfigured()) return '';
+  if (!S.isRemote()) {
+    return `<button class="suggest-card" data-act="go-cloud"><span>☁️</span><span><b>Sincroniza y comparte</b><small>Entra con Google o tu correo para usarlo en varios móviles</small></span><span class="arrow">›</span></button>`;
+  }
+  const h = S.get().household || {};
+  const u = Cloud.currentUser();
+  const members = (h.members || []).map(id => ({ id, ...(h.memberInfo?.[id] || {}) }));
+  return `
+    <div class="set-card home-card">
+      <label class="f-label-sm">🏠 Mi hogar</label>
+      <input id="hhNameIn" class="text-in" value="${esc(h.name || '')}" aria-label="Nombre del hogar">
+      <div class="members">
+        ${members.map(m => `<span class="member">${avatar(m)}<small>${esc(m.id === u?.uid ? 'Tú' : (m.name || 'Miembro'))}</small></span>`).join('')}
+      </div>
+      <div class="invite-box">
+        <span class="muted small">Código para invitar</span>
+        <b class="code">${esc(h.inviteCode || '')}</b>
+        <div class="chips">
+          <button class="chip on" data-act="share-invite">📤 Invitar</button>
+          <button class="chip" data-act="copy-invite">📋 Copiar enlace</button>
+        </div>
+      </div>
+      <p class="muted small">Conectado como ${esc(u?.email || '')}</p>
+      <div class="chips wrap">
+        <button class="chip" data-act="logout">🚪 Cerrar sesión</button>
+        <button class="chip danger" data-act="leave">Salir del hogar</button>
+      </div>
+    </div>`;
+}
+
+async function handleAccountAction(act) {
+  const h = S.get()?.household;
+  if (act === 'go-cloud') { closeSheet(true); setMode(null); return renderAuth(); }
+  if (act === 'logout') return doLogout();
+  if (act === 'leave') {
+    if (!confirm(`¿Salir de "${h?.name}"? Dejarás de ver su nevera en este móvil.`)) return;
+    closeSheet(true);
+    localStorage.removeItem(HID_KEY);
+    await Cloud.leaveHousehold();
+    S.detachRemote();
+    setSyncStatus('');
+    return renderHousehold();
+  }
+  if (act === 'share-invite' || act === 'copy-invite') {
+    const link = inviteLink(h.inviteCode);
+    const text = `¡Únete a nuestra cocina "${h.name}" en Freshkito! 🥬\nCódigo: ${h.inviteCode}\n${link}`;
+    if (act === 'share-invite' && navigator.share) {
+      try { await navigator.share({ title: 'Freshkito', text }); } catch { /* cancelado */ }
+    } else {
+      try { await navigator.clipboard.writeText(act === 'copy-invite' ? link : text); toast('📋 Copiado'); }
+      catch { prompt('Copia este enlace:', link); }
+    }
+  }
+}
+
 /* ================= Arranque ================= */
-S.subscribe(() => { if (S.isReady()) { render(); applyTheme(); } else boot(); });
+S.subscribe(() => {
+  const mounted = !!$('#view');
+  if (S.isReady()) { mounted ? render() : boot(); applyTheme(); }
+  else if (mounted) boot();
+});
 
 function boot() {
   if (!S.isReady()) { ob.step = 0; return renderOnboarding(); }
@@ -819,7 +1071,43 @@ function boot() {
   render();
   renderView(true);
 }
-boot();
+
+async function start() {
+  if (!Cloud.isConfigured()) return boot();
+  if (mode === 'local' && !urlInvite) boot(); // arranque instantáneo en modo local
+  else renderSplash();
+  try {
+    await Cloud.ready();
+    await Cloud.completeEmailLink().catch(e => toast('El enlace no es válido o ha caducado'));
+  } catch (e) {
+    console.warn('Nube no disponible', e);
+    if (mode !== 'local') { if (S.localData()?.appliances) boot(); else renderAuth(); }
+    return;
+  }
+  Cloud.onUser(async user => {
+    if (!user) {
+      Cloud.stopListening();
+      S.detachRemote();
+      if (mode === 'local' && !sessionStorage.getItem(INVITE_KEY)) { if (!$('#view') && !$('.onboard')) boot(); return; }
+      return renderAuth();
+    }
+    setMode('cloud');
+    if (S.isRemote()) return;
+    const cachedHid = localStorage.getItem(HID_KEY);
+    if (cachedHid) { connect(cachedHid); Cloud.getProfile().catch(() => {}); return; } // funciona también sin conexión
+    renderSplash('Cargando tu hogar…');
+    try {
+      const profile = await Cloud.getProfile();
+      if (profile.householdId) connect(profile.householdId);
+      else renderHousehold();
+    } catch (e) {
+      console.error(e);
+      toast('Error de conexión con la nube');
+      renderHousehold();
+    }
+  });
+}
+start();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

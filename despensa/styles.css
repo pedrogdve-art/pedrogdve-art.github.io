@@ -451,6 +451,45 @@ h1, h2, h3, h4 { margin: 0; letter-spacing: -.02em; }
 .toast button { color: var(--primary); font-weight: 900; white-space: nowrap; }
 .toast.out { opacity: 0; transform: translateY(8px); }
 
+/* ================= Cuenta y hogar ================= */
+.splash { min-height: 100dvh; display: grid; place-content: center; text-align: center; gap: .5rem; }
+.center { text-align: center; }
+.auth-box { display: grid; gap: .7rem; max-width: 22rem; width: 100%; margin: 0 auto; }
+.btn.google { background: var(--surface); color: var(--text); box-shadow: var(--shadow); border: 1px solid var(--border); padding: .9rem 1.2rem; }
+.btn.google:hover { background: var(--surface-2); }
+.or { display: flex; align-items: center; gap: .7rem; color: var(--muted); font-size: .82rem; font-weight: 700; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.mail-form { display: flex; gap: .5rem; }
+.mail-form input, .text-in {
+  flex: 1; min-width: 0; width: 100%; border: 2px solid var(--border); background: var(--surface); border-radius: 16px;
+  padding: .8rem 1rem; font-size: 1rem; font-weight: 700; outline: none; transition: border-color .2s;
+}
+.mail-form input:focus, .text-in:focus { border-color: var(--primary); }
+.mail-sent { background: var(--primary-soft); color: var(--text); border-radius: var(--radius); padding: .9rem 1rem; line-height: 1.5; font-weight: 600; animation: fadeUp .3s; }
+.btn:disabled { opacity: .6; pointer-events: none; }
+.small-btn { padding: .5rem .9rem; font-size: .85rem; }
+.user-chip { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; font-size: .85rem; color: var(--muted); min-width: 0; }
+.user-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55vw; }
+.choice-card { background: var(--surface); border-radius: var(--radius); padding: 1rem; box-shadow: var(--shadow); display: grid; gap: .7rem; margin-top: 1rem; border: 2px solid transparent; transition: opacity .2s; }
+.choice-card h3 { font-size: 1.05rem; font-weight: 900; }
+.choice-card.highlight { border-color: var(--primary); }
+.choice-card.dim { opacity: .7; }
+.code-in { text-transform: uppercase; letter-spacing: .3em; text-align: center; font-size: 1.2rem; }
+.check-row { display: flex; align-items: center; gap: .6rem; font-weight: 700; font-size: .9rem; cursor: pointer; }
+.check-row input { width: 20px; height: 20px; accent-color: var(--primary); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; flex: none; object-fit: cover;
+  background: linear-gradient(135deg, var(--primary), var(--accent)); color: #fff; font-weight: 900; font-size: .9rem; }
+.home-card { display: grid; gap: .8rem; margin-bottom: 1rem; }
+.f-label-sm { font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.members { display: flex; gap: .8rem; flex-wrap: wrap; }
+.member { display: flex; flex-direction: column; align-items: center; gap: .2rem; font-weight: 700; }
+.member .avatar { width: 42px; height: 42px; font-size: 1.05rem; box-shadow: 0 0 0 3px var(--surface); }
+.invite-box { background: var(--surface); border-radius: var(--radius); padding: .9rem; display: grid; gap: .5rem; justify-items: center; text-align: center; }
+.invite-box .code { font-size: 1.7rem; letter-spacing: .25em; font-weight: 900; color: var(--primary-strong); }
+.sync { font-size: .85rem; margin-left: .2rem; transition: opacity .3s; }
+.sync.pending { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
 @media (min-width: 600px) {
   .tabbar { border-radius: 22px; bottom: 12px; box-shadow: var(--shadow-lg); border: 1px solid var(--border); }
   .fab { bottom: 100px; }
